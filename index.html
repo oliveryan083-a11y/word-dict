@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🎈 单词小词典</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app">
+    <h1 class="title">🎈 单词小词典</h1>
+    <div class="search-box">
+      <input id="search-input" type="text" placeholder="输入单词或中文，回车查询 🔍" autocomplete="off">
+      <button id="search-btn">查询</button>
+    </div>
+    <div class="toolbar">
+      <button id="fav-list-btn" class="fav-list-btn">📚 生词本</button>
+    </div>
+    <div id="result" class="result">
+      <p class="empty-tip">输入一个单词试试吧 🎈</p>
+    </div>
+  </div>
+
+  <script src="dict-data.js"></script>
+  <script src="dict.js"></script>
+</body>
+</html>
