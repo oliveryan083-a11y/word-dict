@@ -1,29 +1,105 @@
 // dict.js —— 单词小词典：查询逻辑（纯函数）+ DOM 渲染 + 发音
 // 纯函数部分（Task 2），DOM/发音部分（Task 5）会在后面追加。
 
+const EXCHANGE_MAP = { p: '过去式', d: '过去分词', i: '现在分词', '3': '第三人称单数', s: '复数', r: '比较级', t: '最高级' };
+
+// 短字段 -> 完整字段；若已是完整字段则原样返回
+function normalize(it) {
+  if (it.word !== undefined) return it;
+  return {
+    word: it.w,
+    phonetic: it.p || '',
+    usphone: it.u || '',
+    translation: it.t || '',
+    pos: it.o || '',
+    example: it.x || '',
+    example_cn: it.c || '',
+    phrases: it.h || [],
+    star: it.s || 0,
+    exchange: it.e || '',
+  };
+}
+
 function buildIndex(words) {
   const byWord = {};
   const byZh = {};
-  for (const w of words) {
+  const byForm = {};
+  for (const raw of words) {
+    const w = normalize(raw);
     byWord[w.word.toLowerCase()] = w;
     const keywords = String(w.translation || '').split(/[，,;；、\s/]+/).filter(Boolean);
     for (const kw of keywords) {
       if (!byZh[kw]) byZh[kw] = [];
       byZh[kw].push(w);
     }
+    // 变形词反向索引：过去式/过去分词/现在分词/三单/复数 等 -> 原形
+    const ex = w.exchange || '';
+    for (const seg of ex.split('/')) {
+      const idx = seg.indexOf(':');
+      if (idx < 0) continue;
+      const k = seg.slice(0, idx);
+      const v = seg.slice(idx + 1).toLowerCase();
+      if (EXCHANGE_MAP[k] && v && !byForm[v]) {
+        byForm[v] = { base: w, form: EXCHANGE_MAP[k] };
+      }
+    }
   }
-  return { byWord, byZh };
+  return { byWord, byZh, byForm };
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+function searchFuzzy(query, index, maxDist) {
+  const q = String(query || '').trim().toLowerCase();
+  if (!q) return [];
+  const md = maxDist == null ? (q.length <= 4 ? 1 : 2) : maxDist;
+  const results = [];
+  for (const w of Object.keys(index.byWord)) {
+    if (Math.abs(w.length - q.length) > md) continue;
+    const d = levenshtein(q, w);
+    if (d <= md) {
+      results.push({ word: index.byWord[w], dist: d });
+    }
+  }
+  results.sort((a, b) => a.dist - b.dist || a.word.word.length - b.word.word.length);
+  return results.slice(0, 20).map((r) => r.word);
 }
 
 function searchEn(query, index) {
   const q = String(query || '').trim().toLowerCase();
-  if (!q) return { exact: null, suggestions: [] };
-  if (index.byWord[q]) return { exact: index.byWord[q], suggestions: [] };
+  if (!q) return { exact: null, suggestions: [], form: null };
+  // 1. 变形词优先（went -> go）
+  if (index.byForm && index.byForm[q]) {
+    const fm = index.byForm[q];
+    return { exact: fm.base, suggestions: [], form: { query: query.trim(), base: fm.base.word, type: fm.form } };
+  }
+  // 2. 精确匹配原形
+  if (index.byWord[q]) return { exact: index.byWord[q], suggestions: [], form: null };
+  // 3. 前缀匹配
   const suggestions = Object.keys(index.byWord)
     .filter((w) => w.startsWith(q))
     .slice(0, 20)
     .map((w) => index.byWord[w]);
-  return { exact: null, suggestions };
+  if (suggestions.length) return { exact: null, suggestions, form: null };
+  // 4. 模糊搜索
+  return { exact: null, suggestions: searchFuzzy(query, index), form: null };
 }
 
 function searchZh(query, index) {
@@ -43,7 +119,7 @@ function searchZh(query, index) {
 }
 
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { buildIndex, searchEn, searchZh };
+  module.exports = { buildIndex, searchEn, searchZh, searchFuzzy };
 }
 
 // ===== 浏览器运行部分（Node 测试环境不执行） =====
@@ -61,9 +137,10 @@ function formatExchange(ex) {
   }).join('；');
 }
 
-function renderWord(e) {
+function renderWord(e, form) {
   const r = document.getElementById('result');
   const starStr = '★'.repeat(e.star || 0) + '☆'.repeat(Math.max(0, 5 - (e.star || 0)));
+  const formHtml = form ? `<div class="form-tip">🔎 「${form.query}」是「${form.base}」的${form.type}：</div>` : '';
   const phParts = [];
   if (e.phonetic) phParts.push('英 [' + e.phonetic + ']');
   if (e.usphone) phParts.push('美 [' + e.usphone + ']');
@@ -78,6 +155,7 @@ function renderWord(e) {
     : '';
   const faved = isFav(e.word);
   r.innerHTML = `
+    ${formHtml}
     <div class="word-row">
       <span class="word">${e.word}</span>
       ${phHtml}
@@ -85,7 +163,7 @@ function renderWord(e) {
       <button class="speak-btn" onclick="speakUS('${e.word}')">美 🔊</button>
       <button class="fav-btn ${faved ? 'faved' : ''}" onclick="toggleFav('${e.word}')">${faved ? '✅ 已收藏' : '⭐ 收藏'}</button>
     </div>
-    <div class="pos-line">📖 ${e.translation || ''} · ${e.pos ? e.pos + '.' : ''}</div>
+    <div class="pos-line">📖 ${e.translation || ''} · ${e.pos ? (e.pos.endsWith('.') ? e.pos : e.pos + '.') : ''}</div>
     ${exHtml}
     ${exText ? `<div class="meta-line">${exText}</div>` : ''}
     ${phraseHtml}
@@ -102,7 +180,7 @@ function renderSuggestions(list) {
 
 function doSearchWord(word) {
   const res = searchEn(word, INDEX);
-  if (res.exact) renderWord(res.exact);
+  if (res.exact) renderWord(res.exact, res.form);
 }
 
 function renderEmpty() {
@@ -118,7 +196,7 @@ function doSearch() {
     list.length ? renderSuggestions(list) : renderEmpty();
   } else {
     const res = searchEn(q, INDEX);
-    if (res.exact) renderWord(res.exact);
+    if (res.exact) renderWord(res.exact, res.form);
     else if (res.suggestions.length) renderSuggestions(res.suggestions);
     else renderEmpty();
   }
